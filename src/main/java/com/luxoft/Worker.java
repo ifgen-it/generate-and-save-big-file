@@ -4,8 +4,9 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
 import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
@@ -21,8 +22,8 @@ import java.util.stream.IntStream;
  * In the fastest way possible.
  */
 public class Worker {
-    private static int N_THREADS = Runtime.getRuntime().availableProcessors();
-    private static ExecutorService generatorExecutor = Executors.newFixedThreadPool(N_THREADS);
+    private static int N_THREADS = Runtime.getRuntime().availableProcessors()/2;
+    private static ExecutorService EXECUTOR = Executors.newFixedThreadPool(N_THREADS);
     private static String DEFAULT_CATALOG = "results";
 
     private Random random;
@@ -67,11 +68,11 @@ public class Worker {
                     for (int i = batch.getStart(); i < batch.getEnd(); i++) {
                         bytes[i] = generateByte();
                     }
-                }, generatorExecutor)).toList();
+                }, EXECUTOR)).toList();
         futures.forEach(CompletableFuture::join);
         long tEnd = System.currentTimeMillis();
         logTime("generateBytesParallel", tStart, tEnd);
-        generatorExecutor.shutdown();
+        EXECUTOR.shutdown();
         return bytes;
     }
     public byte[] generateBytesParallel2(Random random) {
@@ -85,7 +86,7 @@ public class Worker {
                     byte[] batchResult = new byte[size];
                     random.nextBytes(batchResult);
                     return batchResult;
-                }, generatorExecutor)).toList();
+                }, EXECUTOR)).toList();
         futures.forEach(CompletableFuture::join);
         int counter = 0;
         for (CompletableFuture<byte[]> future : futures) {
@@ -100,7 +101,7 @@ public class Worker {
         }
         long tEnd = System.currentTimeMillis();
         logTime("generateBytesParallel", tStart, tEnd);
-        generatorExecutor.shutdown();
+        EXECUTOR.shutdown();
         return bytes;
     }
     public byte[] generateBytesParallel3(Random random) {
@@ -109,7 +110,7 @@ public class Worker {
         List<BatchIndex> batches = getBatches();
         List<Future<byte[]>> futures = new ArrayList<>();
         for (BatchIndex batch : batches) {
-            Future<byte[]> future = generatorExecutor.submit(() -> {
+            Future<byte[]> future = EXECUTOR.submit(() -> {
                 //System.out.println("started thread = " + Thread.currentThread().getName());
                 int size = batch.getEnd() - batch.getStart();
                 byte[] batchResult = new byte[size];
@@ -131,7 +132,7 @@ public class Worker {
         }
         long tEnd = System.currentTimeMillis();
         logTime("generateBytesParallel", tStart, tEnd);
-        generatorExecutor.shutdown();
+        EXECUTOR.shutdown();
         return bytes;
     }
     public Byte[] generateBytesStreamParallel() {
@@ -145,7 +146,7 @@ public class Worker {
     }
 
     // Writing
-    public String writeRandomAccessFileParallel(byte[] bytes) { // fastest write
+    public String writeRandomAccessFileParallel(byte[] bytes) {
         long tStart = System.currentTimeMillis();
         String opName = "writeRandomAccessFileParallel";
         String fileName = getFileName(opName);
@@ -165,10 +166,10 @@ public class Worker {
                     } catch (IOException ex) {
                         System.out.println(ex.getMessage());
                     }
-                }, generatorExecutor))
+                }, EXECUTOR))
                 .toList();
         futures.forEach(CompletableFuture::join);
-        generatorExecutor.shutdown();
+        EXECUTOR.shutdown();
         long tEnd = System.currentTimeMillis();
         logTime(opName, tStart, tEnd);
         return fileName;
@@ -199,6 +200,71 @@ public class Worker {
         logTime(opName, tStart, tEnd);
         return fileName;
     }
+
+    public String writeMappedByteBuffer(byte[] bytes) {
+        long tStart = System.currentTimeMillis();
+        String opName = "writeMappedByteBuffer";
+        String fileName = getFileName(opName);
+        try (RandomAccessFile raf = new RandomAccessFile(fileName, "rw")) {
+            FileChannel channel = raf.getChannel();
+            MappedByteBuffer mbb = channel.map(FileChannel.MapMode.READ_WRITE, 0, fileSize);
+            mbb.put(bytes);
+
+        } catch (IOException ex) {
+            System.out.println(ex.getMessage());
+        }
+        long tEnd = System.currentTimeMillis();
+        logTime(opName, tStart, tEnd);
+        return fileName;
+    }
+
+    public String writeMappedByteBufferParallel(byte[] bytes) {
+        long tStart = System.currentTimeMillis();
+        String opName = "writeMappedByteBufferParallel";
+        String fileName = getFileName(opName);
+
+        List<BatchIndex> batches = getBatches();
+        List<CompletableFuture<Void>> futures = batches.stream()
+                .map(batch -> CompletableFuture.runAsync(() -> {
+                    try (RandomAccessFile raf = new RandomAccessFile(fileName, "rw")) {
+                        try {
+                            FileChannel channel = raf.getChannel();
+                            MappedByteBuffer mbb = channel.map(FileChannel.MapMode.READ_WRITE, 0, fileSize);
+                            int start = batch.getStart();
+                            int length = batch.getEnd() - batch.getStart();
+
+                            mbb.put(start, bytes, start, length);
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    } catch (IOException ex) {
+                        System.out.println(ex.getMessage());
+                    }
+                }, EXECUTOR))
+                .toList();
+        futures.forEach(CompletableFuture::join);
+        EXECUTOR.shutdown();
+        long tEnd = System.currentTimeMillis();
+        logTime(opName, tStart, tEnd);
+        return fileName;
+    }
+
+    public String generateAndWriteMappedByteBuffer() { // not-fast
+        long tStart = System.currentTimeMillis();
+        String opName = "generateAndWriteMappedByteBuffer";
+        String fileName = getFileName(opName);
+        try (RandomAccessFile raf = new RandomAccessFile(fileName, "rw")) {
+            FileChannel channel = raf.getChannel();
+            MappedByteBuffer mbb = channel.map(FileChannel.MapMode.READ_WRITE, 0, fileSize);
+            byte[] bytes = generateBytesLib();
+            mbb.put(bytes);
+        } catch (IOException ex) {
+            System.out.println(ex.getMessage());
+        }
+        long tEnd = System.currentTimeMillis();
+        logTime(opName, tStart, tEnd);
+        return fileName;
+    }
     public String generateAndWriteRandomAccessFileParallel() {
         long tStart = System.currentTimeMillis();
         String opName = "generateAndWriteRandomAccessFileParallel";
@@ -221,10 +287,10 @@ public class Worker {
                     } catch (IOException ex) {
                         System.out.println(ex.getMessage());
                     }
-                }, generatorExecutor))
+                }, EXECUTOR))
                 .toList();
         futures.forEach(CompletableFuture::join);
-        generatorExecutor.shutdown();
+        EXECUTOR.shutdown();
         long tEnd = System.currentTimeMillis();
         logTime(opName, tStart, tEnd);
         return fileName;
