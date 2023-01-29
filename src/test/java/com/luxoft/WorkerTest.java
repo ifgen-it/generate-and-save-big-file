@@ -5,6 +5,20 @@ import org.junit.jupiter.api.Test;
 public class WorkerTest {
 
     @Test
+    public void test_parallel_generating_parallel_writing_mapped_byte_buffer() { // 0 place
+        long tStart = System.currentTimeMillis();
+        Worker worker = new Worker(0, 100_000_000, "results");
+        byte[] bytes = worker.generateBytesLibParallel();               // 45 ms
+        String fileName = worker.writeMappedByteBufferParallel(bytes);  // 34 ms
+        long tEnd = System.currentTimeMillis();
+        worker.logTime("wholeProgram", tStart, tEnd);
+
+        byte[] readBytes = worker.readBytesFromFile(fileName);
+        Assertions.assertArrayEquals(bytes, readBytes);
+        Assertions.assertTrue(worker.checkRandomization(bytes));
+    }
+
+    @Test
     public void test_serial_generating_parallel_writing_mapped_byte_buffer() { // 1st place
         long tStart = System.currentTimeMillis();
         Worker worker = new Worker(0, 100_000_000, "results");
