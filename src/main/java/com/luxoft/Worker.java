@@ -309,7 +309,6 @@ public class Worker {
                     break;
                 start = end;
             }
-
         } catch (IOException ex) {
             System.out.println(ex.getMessage());
         }
